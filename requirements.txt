@@ -1,0 +1,4 @@
+aiogram
+easyocr
+opencv-python-headless
+numpy
