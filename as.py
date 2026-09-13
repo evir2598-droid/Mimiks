@@ -5,7 +5,7 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery
-import urllib.parse  # Нужно для красивого формирования текста в ссылке
+import urllib.parse
 
 # Токен твоего бота от BotFather
 TOKEN = "8755527072:AAH4iXe_o1zHRm7_D0mxm8otePrZihQrYew"
@@ -19,7 +19,7 @@ class OrderState(StatesGroup):
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
-# База услуг с ценами в грн
+# База услуг точно по сайту Rock-Boost (в грн)
 SERVICES = {
     "tg": {
         "name": "Telegram", 
@@ -41,8 +41,17 @@ SERVICES = {
         "name": "TikTok", 
         "items": {
             "tt_views": {"name": "Просмотры TikTok", "price_1000": 24},
-            "tt_subs": {"name": "Подписчики TikTok", "price_1000": 350},
-            "tt_likes": {"name": "Лайки TikTok", "price_1000": 120}
+            "tt_subs": {"name": "Подписчики TikTok", "price_1000": 351}, # 35.10 за 100 шт -> 351 за 1000
+            "tt_likes": {"name": "Лайки TikTok (от 1000 шт)", "price_1000": 140},
+            "tt_likes_small": {"name": "Лайки TikTok (от 100 шт)", "price_1000": 150}, # 15 за 100 шт
+            "tt_complex_start": {"name": "Пакет TikTok START", "price_1000": 388, "is_packet": True},
+            "tt_complex_std": {"name": "Пакет TikTok STANDART", "price_1000": 855, "is_packet": True},
+            "tt_complex_max": {"name": "Пакет TikTok MAX", "price_1000": 3370, "is_packet": True},
+            "tt_stream_likes": {"name": "Лайки прямой эфир", "price_1000": 100}, # 10 за 100 шт
+            "tt_stream_battle": {"name": "Лайки Тик-ток батл", "price_1000": 350}, # 35 за 100 шт
+            "tt_reposts": {"name": "Репосты в TikTok", "price_1000": 150}, # 7.50 за 50 шт -> 150 за 1000
+            "tt_comments": {"name": "Комментарии (смайли)", "price_1000": 1000}, # 10 за 10 шт -> 1000 за 1000
+            "tt_saves": {"name": "Сохранение видео", "price_1000": 200} # 20 за 100 шт -> 200 за 1000
         }
     },
     "youtube": {
@@ -96,7 +105,13 @@ async def choose_service_type(callback: CallbackQuery, state: FSMContext):
     
     buttons = []
     for service_code, s_info in plat_data["items"].items():
-        buttons.append([InlineKeyboardButton(text=f"{s_info['name']} ({s_info['price_1000']} грн / 1000 шт)", callback_data=f"srv_{service_code}")])
+        # Если это пакет (фиксированная цена за 1 шт), пишем цену за пакет
+        if s_info.get("is_packet"):
+            btn_text = f"{s_info['name']} — {s_info['price_1000']} грн"
+        else:
+            btn_text = f"{s_info['name']} ({s_info['price_1000']} грн / 1000 шт)"
+            
+        buttons.append([InlineKeyboardButton(text=btn_text, callback_data=f"srv_{service_code}")])
     
     buttons.append([InlineKeyboardButton(text="🔙 Назад к соцсетям", callback_data="make_order")])
     
@@ -115,7 +130,11 @@ async def ask_for_link(callback: CallbackQuery, state: FSMContext):
             selected_service = plat["items"][service_code]
             break
             
-    await state.update_data(service_name=selected_service["name"], price_1000=selected_service["price_1000"])
+    await state.update_data(
+        service_name=selected_service["name"], 
+        price_1000=selected_service["price_1000"],
+        is_packet=selected_service.get("is_packet", False)
+    )
     
     await callback.message.edit_text(
         f"🔗 Вы выбрали: <b>{selected_service['name']}</b>\n\n"
@@ -129,31 +148,40 @@ async def ask_for_link(callback: CallbackQuery, state: FSMContext):
 @dp.message(OrderState.waiting_for_link)
 async def process_link(message: types.Message, state: FSMContext):
     await state.update_data(link=message.text)
-    await message.answer("🔢 Введите количество (минимальный заказ от 100 шт, например: 500, 1000, 5000):")
+    data = await state.get_data()
+    
+    if data.get("is_packet"):
+        await message.answer("📦 Это готовый пакет. Введите количество пакетов (например: 1):")
+    else:
+        await message.answer("🔢 Введите количество (минимальный заказ от 100 шт, например: 500, 1000, 5000):")
+        
     await state.set_state(OrderState.waiting_for_quantity)
 
 # Получение количества -> расчет и вывод реквизитов менеджера с авто-текстом
 @dp.message(OrderState.waiting_for_quantity)
 async def process_quantity(message: types.Message, state: FSMContext):
     if not message.text.isdigit():
-        await message.answer("❌ Введите корректное число (например, 1000):")
+        await message.answer("❌ Введите корректное число:")
         return
     
     quantity = int(message.text)
-    if quantity < 100:
-        await message.answer("⚠️ Минимальное количество для заказа — 100 штук. Попробуйте ввести большее число:")
-        return
-        
     data = await state.get_data()
-    price_1000 = data['price_1000']
     
-    total_price = round((quantity / 1000) * price_1000, 2)
+    if data.get("is_packet"):
+        total_price = quantity * data['price_1000']
+        qty_text = f"{quantity} пакет(а)"
+    else:
+        if quantity < 100:
+            await message.answer("⚠️ Минимальное количество для заказа — 100 штук. Попробуйте ввести большее число:")
+            return
+        total_price = round((quantity / 1000) * data['price_1000'], 2)
+        qty_text = f"{quantity} шт."
     
     order_message = (
         f"Здравствуйте! Я хочу оплатить заказ:\n\n"
         f"🛠 Услуга: {data['service_name']}\n"
         f"🔗 Ссылка: {data['link']}\n"
-        f"📊 Количество: {quantity} шт.\n"
+        f"📊 Количество: {qty_text}\n"
         f"💰 Сумма: {total_price} грн\n\n"
         f"Жду реквизиты для оплаты!"
     )
@@ -164,7 +192,7 @@ async def process_quantity(message: types.Message, state: FSMContext):
         f"📝 <b>Ваш заказ успешно сформирован!</b>\n\n"
         f"🛠 Услуга: <b>{data['service_name']}</b>\n"
         f"🔗 Ссылка: <code>{data['link']}</code>\n"
-        f"📊 Количество: <b>{quantity} шт.</b>\n"
+        f"📊 Количество: <b>{qty_text}</b>\n"
         f"💰 <b>Сумма к оплате: {total_price} грн</b>\n\n"
         f"━━━━━━━━━━━━━━━━━━━\n"
         f"💳 <b>Инструкция по оплате:</b>\n"
