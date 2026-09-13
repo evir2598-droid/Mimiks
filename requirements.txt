@@ -1,4 +1,2 @@
 aiogram
-easyocr
-opencv-python-headless
-numpy
+yt-dlp
